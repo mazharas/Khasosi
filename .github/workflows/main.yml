@@ -1,0 +1,69 @@
+name: Infinite High-Speed RDP Runner
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"  # Auto restart every 6 hours
+
+jobs:
+  rdp-session:
+    runs-on: windows-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Enable RDP + Create Permanent User
+        shell: pwsh
+        run: |
+          Write-Host "Enabling RDP..."
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+            -Name "fDenyTSConnections" -Value 0 -Force
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+
+          $password = "M@zharas12"  # Permanent password
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+
+          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
+            New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+            Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+            Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          } else {
+            Write-Host "User already exists."
+          }
+
+          Write-Host "✅ Username: RDP"
+          Write-Host "✅ Password: $password"
+
+      - name: Install and Connect Tailscale
+        shell: pwsh
+        run: |
+          Write-Host "Downloading and installing Tailscale..."
+          $tsInstaller = "$env:TEMP\tailscale.exe"
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile $tsInstaller
+          Start-Process -FilePath $tsInstaller -ArgumentList "/quiet" -Wait
+          $tsExe = "C:\Program Files\Tailscale\tailscale.exe"
+          & "$tsExe" up --authkey "${{ secrets.TAILSCALE_AUTHKEY }}" --hostname "GitHub-Runner-${{ github.run_id }}"
+          Write-Host "Tailscale connection established."
+          
+      - name: Display RDP Details
+        shell: pwsh
+        run: |
+          Write-Host "========== RDP ACCESS =========="
+          Write-Host "Use Tailscale IP from dashboard"
+          Write-Host "Username: RDP"
+          Write-Host "Password: M@zharas12"
+          Write-Host "================================"
+
+      - name: Keep Alive
+        shell: pwsh
+        run: |
+          for ($i=0; $i -lt 350; $i+=5) {
+            Write-Host "[$(Get-Date)] RDP Active for $i minutes..."
+            Start-Sleep -Seconds 300
+          }
+
+      - name: Auto Restart
+        if: always()
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          event-type: restart-runner
